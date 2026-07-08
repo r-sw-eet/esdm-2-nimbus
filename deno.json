@@ -1,0 +1,25 @@
+{
+    "tasks": {
+        "gen": "deno run --allow-read --allow-write --allow-env --allow-run src/main.ts generate",
+        "map": "deno run --allow-read --allow-write --allow-env src/main.ts bpmn:map",
+        "targets": "deno run src/main.ts targets",
+        "test": "deno test --allow-read --allow-write --allow-env --allow-run tests/",
+        "examples": "scripts/examples.sh",
+        "smoke": "scripts/examples.sh --check"
+    },
+    "lint": { "include": ["src/", "tests/"] },
+    "fmt": {
+        "include": ["src/", "tests/"],
+        "useTabs": false,
+        "lineWidth": 120,
+        "indentWidth": 4,
+        "semiColons": true,
+        "singleQuote": true
+    },
+    "imports": {
+        "@std/assert": "jsr:@std/assert@^1.0.6",
+        "@std/cli": "jsr:@std/cli@^1.0.6",
+        "@std/yaml": "jsr:@std/yaml@^1.1.2",
+        "fast-xml-parser": "npm:fast-xml-parser@^4.5.7"
+    }
+}

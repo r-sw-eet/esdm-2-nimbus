@@ -1,0 +1,13 @@
+.idea/
+
+# Own esdm lint binary — host tooling, fetched/copied locally (not published)
+/tools/
+
+# Generated app output is disposable — regenerate with `deno task examples`.
+# The example SOURCE (model/, authoring/, esdmgen.yaml) is tracked.
+examples/*/generated/
+
+# Local working state / agent guidance — not public material
+/HANDOFF.md
+/CLAUDE.md
+/LOCKS.md

@@ -1,0 +1,5 @@
+target: nimbus-eventsourcingdb
+model: model
+out: generated
+options:
+  appName: factory
