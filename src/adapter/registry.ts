@@ -1,4 +1,5 @@
 import { NimbusEventSourcingDbAdapter } from './nimbus/nimbusAdapter.ts';
+import { NimbusPostgresAdapter } from './nimbus/nimbusPostgresAdapter.ts';
 import type { Adapter } from './adapter.ts';
 
 export class AdapterRegistry {
@@ -7,6 +8,7 @@ export class AdapterRegistry {
     static withDefaults(): AdapterRegistry {
         const registry = new AdapterRegistry();
         registry.register(new NimbusEventSourcingDbAdapter());
+        registry.register(new NimbusPostgresAdapter());
 
         return registry;
     }

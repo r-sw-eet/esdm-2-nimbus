@@ -6,11 +6,11 @@ and FEEL guards), an optional `authoring/*.bpmn`, and an `esdmgen.yaml` targetin
 `nimbus-eventsourcingdb`. The models are codegen-neutral — keep them in sync with the
 equivalent apps in any other ESDM codegen.
 
-Generate each app's runnable Nimbus + EventSourcingDB + MongoDB output into its own
-**gitignored** `generated/` subdir:
+Generate each app's runnable output into its own **gitignored** `generated/` subdir —
+both targets are emitted, side by side:
 
 ```sh
-deno task examples            # generate all → examples/<app>/generated/nimbus/
+deno task examples            # all apps × both targets → examples/<app>/generated/{nimbus,nimbus-postgres}/
 scripts/examples.sh --check   # smoke gate: temp dir, fail loudly, write nothing
 ```
 

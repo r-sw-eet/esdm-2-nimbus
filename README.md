@@ -2,11 +2,13 @@
 
 A Deno/TypeScript code generator that consumes an [ESDM](https://www.esdm.io/) model (core kinds plus the state-machine,
 FEEL and BPMN-mapping extension proposals) and emits a complete, runnable event-sourced application on the **Nimbus**
-(`@nimbus-cqrs`) + **[EventSourcingDB](https://www.eventsourcingdb.io/)** + **MongoDB** stack. A model can be written
+(`@nimbus-cqrs`) stack, with a choice of event store: **[EventSourcingDB](https://www.eventsourcingdb.io/)** or
+**[PostgreSQL](https://www.postgresql.org/)** (read models on **MongoDB** either way). A model can be written
 directly as ESDM, or authored as BPMN and mapped down to ESDM first (proposal 0003).
 
 It implements the [esdm-extensions](https://github.com/r-sw-eet/esdm-extensions) proposals and the
-`esdm-extensions.io/*` annotation namespace, and is the sole owner of the `nimbus-eventsourcingdb` target. It is
+`esdm-extensions.io/*` annotation namespace, and is the sole owner of the `nimbus-eventsourcingdb` and
+`nimbus-postgres` targets. It is
 **self-contained** — it carries its own example models and depends on no sibling repo. The one external tool it needs
 is the upstream `esdm` lint CLI (third-party, not bundled — see [Prerequisites](#prerequisites)).
 
@@ -20,7 +22,7 @@ is kept):
 | Model / input format | [ESDM](https://www.esdm.io/) + [esdm-extensions](https://github.com/r-sw-eet/esdm-extensions) proposals 0001–0004 |
 | Generator runtime    | [Deno](https://deno.com/) · [TypeScript](https://www.typescriptlang.org/)                                         |
 | Generated app        | [Nimbus](https://nimbus.overlap.at/) (`@nimbus-cqrs`) · [Hono](https://hono.dev/) HTTP                            |
-| Event store          | [EventSourcingDB](https://www.eventsourcingdb.io/)                                                                |
+| Event store          | [EventSourcingDB](https://www.eventsourcingdb.io/) (`nimbus-eventsourcingdb`) or [PostgreSQL](https://www.postgresql.org/) (`nimbus-postgres`) |
 | Read side            | [MongoDB](https://www.mongodb.com/) projections + query API                                                       |
 
 ## Pipeline
@@ -41,10 +43,14 @@ BPMN            ESDM YAML  ──esdm lint──▶  parse + wire model  ──F
   aggregate, read model → events, query → read model, policy → both ends).
 - **FEEL gate** — every state-machine `admits[].when` guard is parsed and its identifiers bound against the aggregate's
   declared state fields.
-- **Adapter** — emits the write side (pure deciders with 0001/0002 guards compiled to TypeScript, EventSourcingDB append
+- **Adapter** — emits the write side (pure deciders with 0001/0002 guards compiled to TypeScript, event-store append
   with concurrency preconditions), the read side (MongoDB projections + query API), the app bootstrap (Hono HTTP,
   compose stack, Dockerfile), and the dev-only **domain-console contract** (proposal 0004: `/_dev/catalog|bpmn|events`)
-  consumed by the stack-agnostic `esdm-vue-reader` viewer.
+  consumed by the stack-agnostic `esdm-vue-reader` viewer. Two targets share this emission and differ only in the
+  store: `nimbus-eventsourcingdb` appends to EventSourcingDB and projects via Nimbus event observers;
+  `nimbus-postgres` appends to a Postgres `eventstore` table (global order = the `id` bigint, unique
+  `(aggregate, aggregate_id, playhead)` as the concurrency guard) and projects via a subscription engine with durable
+  cursors in a `subscriptions` table — the same architecture as the sibling Symfony/patchlevel generator.
 
 The model layer is framework-agnostic; `src/adapter/nimbus/` is the only place that knows the target stack. Generated
 apps have **no manual-code seam** — reactions are `policy` documents in the model and external egress consumes the event
@@ -69,6 +75,7 @@ deno task map path/to/app
 
 # app dir contains esdmgen.yaml + model/*.esdm.yaml
 deno task gen path/to/app --target nimbus-eventsourcingdb [--skip-lint] [--strict]
+deno task gen path/to/app --target nimbus-postgres          # PostgreSQL event store instead of EventSourcingDB
 
 # list targets
 deno task targets
@@ -87,8 +94,8 @@ options:
     appName: my-app
 ```
 
-Each target writes into its own subdirectory (`generated/nimbus/`). Run the emitted app with
-`docker compose up -d --build` inside that directory.
+Each target writes into its own subdirectory (`generated/nimbus/`, `generated/nimbus-postgres/`). Run the emitted app
+with `docker compose up -d --build` inside that directory.
 
 ## Development
 

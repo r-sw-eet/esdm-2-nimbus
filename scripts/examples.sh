@@ -36,28 +36,42 @@ for app_dir in "${apps[@]}"; do
     [ -f "${app_dir}esdmgen.yaml" ] || continue
     app="$(basename "$app_dir")"
 
-    if [ "$CHECK" -eq 1 ]; then
-        gen_out="$WORK/$app/nimbus"
-        deno_args=(-o "$WORK/$app")
-    else
-        gen_out="${app_dir}generated/nimbus"
-        deno_args=()   # esdmgen.yaml's `out: generated` → examples/<app>/generated/nimbus
-    fi
+    # Every app is generated with both targets: the one its esdmgen.yaml names
+    # (nimbus-eventsourcingdb → generated/nimbus) and nimbus-postgres.
+    for target in default nimbus-postgres; do
+        if [ "$target" = "default" ]; then
+            target_args=()
+            slug="nimbus"
+            label="$app"
+        else
+            target_args=(--target "$target")
+            slug="$target"
+            label="$app ($target)"
+        fi
 
-    if ! deno run --allow-read --allow-write --allow-env --allow-run src/main.ts \
-        generate "$app_dir" "${deno_args[@]}" >/dev/null; then
-        echo "$app: GENERATION FAILED"
-        fail=1
-        continue
-    fi
+        if [ "$CHECK" -eq 1 ]; then
+            gen_out="$WORK/$app/$slug"
+            deno_args=(-o "$WORK/$app")
+        else
+            gen_out="${app_dir}generated/$slug"
+            deno_args=()   # esdmgen.yaml's `out: generated` → examples/<app>/generated/<slug>
+        fi
 
-    count="$(find "$gen_out" -type f 2>/dev/null | wc -l)"
-    if [ "$count" -lt 10 ]; then
-        echo "$app: SUSPICIOUSLY EMPTY ($count files)"
-        fail=1
-        continue
-    fi
-    echo "$app: $count files"
+        if ! deno run --allow-read --allow-write --allow-env --allow-run src/main.ts \
+            generate "$app_dir" "${deno_args[@]}" "${target_args[@]}" >/dev/null; then
+            echo "$label: GENERATION FAILED"
+            fail=1
+            continue
+        fi
+
+        count="$(find "$gen_out" -type f 2>/dev/null | wc -l)"
+        if [ "$count" -lt 10 ]; then
+            echo "$label: SUSPICIOUSLY EMPTY ($count files)"
+            fail=1
+            continue
+        fi
+        echo "$label: $count files"
+    done
 done
 
 exit $fail
