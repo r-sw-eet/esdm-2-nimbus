@@ -2050,7 +2050,7 @@ ESDB_API_TOKEN=secret
     }
 
     private dockerfile(): string {
-        return `FROM denoland/deno:2.1.4
+        return `FROM denoland/deno:2.9.2
 
 WORKDIR /app
 COPY deno.json deno.json
