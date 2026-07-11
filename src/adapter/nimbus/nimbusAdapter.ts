@@ -23,6 +23,10 @@ import { bsonType, defaultLiteral, tsType, zodWithDefault } from './types.ts';
  * appended to EventSourcingDB (subject `/<aggregate>/<id>`). Read side: Nimbus
  * event observers project the same events into MongoDB read collections that the
  * query API reads. A single process serves HTTP and runs the projections.
+ *
+ * Doubles as the base for other Nimbus targets: everything store-specific goes
+ * through the protected "store seam" methods, which a subclass overrides to
+ * swap the event store while reusing the whole model emission.
  */
 export class NimbusEventSourcingDbAdapter implements Adapter {
     name(): string {
@@ -71,6 +75,99 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
         this.emitBootstrap(project, model, appName);
 
         return project;
+    }
+
+    // ---- store seam (override these to swap the event store) ---------------
+
+    /** Store + id imports of the create command handler. */
+    protected createHandlerHeader(): string[] {
+        return [
+            "import { writeEvents } from '@nimbus-cqrs/eventsourcingdb';",
+            "import { ulid } from '@std/ulid';",
+            "import { isSubjectPristine } from 'eventsourcingdb';",
+        ];
+    }
+
+    /** Store imports of the replay-then-decide command handler. */
+    protected mutateHandlerHeader(): string[] {
+        return [
+            'import {',
+            '    eventSourcingDBEventToNimbusEvent,',
+            '    readEvents,',
+            '    writeEvents,',
+            "} from '@nimbus-cqrs/eventsourcingdb';",
+            "import { isSubjectPopulated } from 'eventsourcingdb';",
+        ];
+    }
+
+    /** Parameter name for a raw store event in handlers/projections/policies. */
+    protected storeEventVar(): string {
+        return 'esdbEvent';
+    }
+
+    /** Type of a raw store event as imported by projections/policies. */
+    protected storeEventType(): string {
+        return 'EventSourcingDBEvent';
+    }
+
+    /** Function converting a raw store event into a Nimbus event. */
+    protected toNimbusEventFn(): string {
+        return 'eventSourcingDBEventToNimbusEvent';
+    }
+
+    /** Store imports of a projection file (converter + raw event type). */
+    protected projectionStoreImports(): string[] {
+        return [
+            "import { eventSourcingDBEventToNimbusEvent } from '@nimbus-cqrs/eventsourcingdb';",
+            "import { Event as EventSourcingDBEvent } from 'eventsourcingdb';",
+        ];
+    }
+
+    /** Store imports of a policy file (converter + raw event type). */
+    protected policyStoreImports(): string[] {
+        return this.projectionStoreImports();
+    }
+
+    /** The read-model repository's projection-cursor accessor, if the store needs one. */
+    protected repositoryCursorLines(): string[] {
+        return [
+            '',
+            '    public async getLastProjectedEventId(): Promise<string> {',
+            '        const rows = await this.find({',
+            '            filter: {},',
+            '            limit: 1,',
+            '            skip: 0,',
+            '            sort: { revision: -1 },',
+            '        });',
+            '',
+            "        return rows[0]?.revision ?? '0';",
+            '    }',
+        ];
+    }
+
+    /** The projection file's resume-cursor exports, if the store needs them. */
+    protected projectionCursorExports(type: string, repoVar: string): string[] {
+        return [
+            '',
+            'export const get' + type + 'ProjectionLowerBound = async () => {',
+            '    const lastEventId = await ' + repoVar + '.getLastProjectedEventId();',
+            '',
+            '    return {',
+            '        id: lastEventId,',
+            "        type: lastEventId === '0' ? 'inclusive' : 'exclusive',",
+            '    };',
+            '};',
+        ];
+    }
+
+    /** The frameworks whose built-in @opentelemetry/api spans the app carries. */
+    protected otelFrameworks(): string {
+        return 'Hono / MongoDB / EventSourcingDB';
+    }
+
+    /** Emit the store client/bootstrap file(s) wiring observers to handlers. */
+    protected emitStoreBootstrap(project: GeneratedProject, model: Model): void {
+        project.add('src/eventsourcingdb.ts', this.eventSourcingDbTs(model));
     }
 
     // ---- write: state reducer ---------------------------------------------
@@ -358,9 +455,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
             let lines: string[];
             if (create) {
                 lines = [
-                    "import { writeEvents } from '@nimbus-cqrs/eventsourcingdb';",
-                    "import { ulid } from '@std/ulid';",
-                    "import { isSubjectPristine } from 'eventsourcingdb';",
+                    ...this.createHandlerHeader(),
                     'import { ' + fn + ', ' + cmdClass + "Command } from '../../core/commands/" + fn +
                     ".command.ts';",
                     'import { ' + stateType + " } from '../../core/domain/" + camel(aggregate.name) + ".state.ts';",
@@ -381,12 +476,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
                 ];
             } else {
                 lines = [
-                    'import {',
-                    '    eventSourcingDBEventToNimbusEvent,',
-                    '    readEvents,',
-                    '    writeEvents,',
-                    "} from '@nimbus-cqrs/eventsourcingdb';",
-                    "import { isSubjectPopulated } from 'eventsourcingdb';",
+                    ...this.mutateHandlerHeader(),
                     'import { ' + fn + ', ' + cmdClass + "Command } from '../../core/commands/" + fn +
                     ".command.ts';",
                     'import {',
@@ -398,14 +488,14 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
                     '    let state: ' + stateType + ' = { ' + idProp + ': command.data.' + idProp + ' };',
                     '',
                     '    for await (',
-                    '        const esdbEvent of readEvents(',
+                    '        const ' + this.storeEventVar() + ' of readEvents(',
                     '            `' + subjectRoot + '/${command.data.' + idProp + '}`,',
                     '            { recursive: false },',
                     '        )',
                     '    ) {',
                     '        state = applyEventTo' + stateType + '(',
                     '            state,',
-                    '            eventSourcingDBEventToNimbusEvent(esdbEvent),',
+                    '            ' + this.toNimbusEventFn() + '(' + this.storeEventVar() + '),',
                     '        );',
                     '    }',
                     '',
@@ -612,17 +702,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
         }
         lines.push('        };');
         lines.push('    }');
-        lines.push('');
-        lines.push('    public async getLastProjectedEventId(): Promise<string> {');
-        lines.push('        const rows = await this.find({');
-        lines.push('            filter: {},');
-        lines.push('            limit: 1,');
-        lines.push('            skip: 0,');
-        lines.push('            sort: { revision: -1 },');
-        lines.push('        });');
-        lines.push('');
-        lines.push("        return rows[0]?.revision ?? '0';");
-        lines.push('    }');
+        lines.push(...this.repositoryCursorLines());
         lines.push('}');
         lines.push('');
         lines.push('export const ' + repoVar + ' = new ' + repoClass + '();');
@@ -641,8 +721,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
 
         const lines = [
             "import { getLogger } from '@nimbus-cqrs/core';",
-            "import { eventSourcingDBEventToNimbusEvent } from '@nimbus-cqrs/eventsourcingdb';",
-            "import { Event as EventSourcingDBEvent } from 'eventsourcingdb';",
+            ...this.projectionStoreImports(),
             "import { ObjectId } from 'mongodb';",
         ];
         for (const event of events) {
@@ -655,14 +734,14 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
         lines.push('import { ' + repoVar + " } from './" + file + ".repository.ts';");
         lines.push('');
         lines.push('export const ' + fn + ' = async (');
-        lines.push('    esdbEvent: EventSourcingDBEvent,');
+        lines.push('    ' + this.storeEventVar() + ': ' + this.storeEventType() + ',');
         lines.push(') => {');
         const eventUnion = events.map((e) => studly(e.name) + 'Event').join(' | ');
         lines.push(
-            '    const event = eventSourcingDBEventToNimbusEvent<' + (eventUnion !== '' ? eventUnion : 'never') +
+            '    const event = ' + this.toNimbusEventFn() + '<' + (eventUnion !== '' ? eventUnion : 'never') +
                 '>(',
         );
-        lines.push('        esdbEvent,');
+        lines.push('        ' + this.storeEventVar() + ',');
         lines.push('    );');
         lines.push('');
 
@@ -679,15 +758,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
         lines.push('        message: `Unhandled event type ${(event as { type: string }).type}`,');
         lines.push('    });');
         lines.push('};');
-        lines.push('');
-        lines.push('export const get' + type + 'ProjectionLowerBound = async () => {');
-        lines.push('    const lastEventId = await ' + repoVar + '.getLastProjectedEventId();');
-        lines.push('');
-        lines.push('    return {');
-        lines.push('        id: lastEventId,');
-        lines.push("        type: lastEventId === '0' ? 'inclusive' : 'exclusive',");
-        lines.push('    };');
-        lines.push('};');
+        lines.push(...this.projectionCursorExports(type, repoVar));
 
         project.add(this.readBase(context, readModel) + '/projections/' + file + '.projection.ts', this.file(lines));
     }
@@ -936,8 +1007,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
 
             const lines = [
                 "import { createCommand, getLogger, getRouter } from '@nimbus-cqrs/core';",
-                "import { eventSourcingDBEventToNimbusEvent } from '@nimbus-cqrs/eventsourcingdb';",
-                "import { Event as EventSourcingDBEvent } from 'eventsourcingdb';",
+                ...this.policyStoreImports(),
                 'import {',
                 '    is' + eventClass + 'Event,',
                 '    ' + eventClass + 'Event,',
@@ -951,8 +1021,10 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
                 this.relFromPolicies(this.writeBase(emitAgg) + '/core/commands/' + cmdFn + '.command.ts') +
                 "';",
                 '',
-                'export const ' + fn + ' = async (esdbEvent: EventSourcingDBEvent) => {',
-                '    const event = eventSourcingDBEventToNimbusEvent<' + eventClass + 'Event>(esdbEvent);',
+                'export const ' + fn + ' = async (' + this.storeEventVar() + ': ' + this.storeEventType() +
+                ') => {',
+                '    const event = ' + this.toNimbusEventFn() + '<' + eventClass + 'Event>(' +
+                this.storeEventVar() + ');',
                 '    if (!is' + eventClass + 'Event(event)) {',
                 '        return;',
                 '    }',
@@ -1341,7 +1413,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
             'export const bpmnSource = ' + JSON.stringify(bpmnSource) + ';\n';
     }
 
-    private devHttpTs(): string {
+    protected devHttpTs(): string {
         return `import { isEventData, readEvents } from '@nimbus-cqrs/eventsourcingdb';
 import { Hono } from 'hono';
 import { bpmnSource } from './bpmn.ts';
@@ -1615,7 +1687,7 @@ export default httpDevRouter;
         project.add('src/http.ts', this.httpTs());
         project.add('src/otel.ts', this.otelTs(appName));
         project.add('src/main.ts', this.mainTs());
-        project.add('src/eventsourcingdb.ts', this.eventSourcingDbTs(model));
+        this.emitStoreBootstrap(project, model);
     }
 
     private eventSourcingDbTs(model: Model): string {
@@ -1687,7 +1759,7 @@ export default httpDevRouter;
         return this.file(lines);
     }
 
-    private mainTs(): string {
+    protected mainTs(): string {
         return `import './otel.ts';
 import {
     getLogger,
@@ -1769,7 +1841,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 
 // Registers an SDK for the framework's built-in @opentelemetry/api spans and
-// metrics (Hono / MongoDB / EventSourcingDB), which are no-ops without one.
+// metrics (${this.otelFrameworks()}), which are no-ops without one.
 // Imported first by main.ts and registered synchronously so framework
 // module-scope meters bind to a live provider. Active only when
 // OTEL_EXPORTER_OTLP_ENDPOINT is set (e.g. http://lgtm:4318).
@@ -1816,7 +1888,7 @@ if (endpoint) {
 `;
     }
 
-    private httpTs(): string {
+    protected httpTs(): string {
         return `import { getLogger } from '@nimbus-cqrs/core';
 import { getEventSourcingDBClient } from '@nimbus-cqrs/eventsourcingdb';
 import {
@@ -1916,7 +1988,7 @@ export const initMongoDB = () => {
 `;
     }
 
-    private denoJson(hasTests: boolean): string {
+    protected denoJson(hasTests: boolean): string {
         const testTask = hasTests ? ',\n        "test": "deno test -A"' : '';
         const assertImport = hasTests ? '\n        "@std/assert": "jsr:@std/assert@^1.0.6",' : '';
         return `{
@@ -1958,7 +2030,7 @@ export const initMongoDB = () => {
 `;
     }
 
-    private envExample(): string {
+    protected envExample(): string {
         return `NODE_ENV=development
 LOG_LEVEL=debug
 LOG_FORMAT=pretty
@@ -1991,7 +2063,7 @@ CMD ["run", "-A", "src/main.ts"]
 `;
     }
 
-    private composeYaml(_appName: string): string {
+    protected composeYaml(_appName: string): string {
         return `# Generated stack: esdb (EventSourcingDB event store + UI), mongo (read models),
 # api (Hono HTTP + in-process Nimbus projections).
 services:
@@ -2039,7 +2111,7 @@ volumes:
 `;
     }
 
-    private appReadme(appName: string): string {
+    protected appReadme(appName: string): string {
         return `# ${appName} (generated)
 
 Generated by **esdm-2-nimbus** with the \`nimbus-eventsourcingdb\` target —
@@ -2121,15 +2193,15 @@ nothing from this app but the stream.
         return this.readBase(context, readModel);
     }
 
-    private readModelDir(_context: BoundedContext, readModel: ReadModel): string {
+    protected readModelDir(_context: BoundedContext, readModel: ReadModel): string {
         return readModel.name;
     }
 
-    private subjectRoot(aggregate: Aggregate): string {
+    protected subjectRoot(aggregate: Aggregate): string {
         return '/' + aggregate.name;
     }
 
-    private projectionSubject(context: BoundedContext, readModel: ReadModel): string {
+    protected projectionSubject(context: BoundedContext, readModel: ReadModel): string {
         const aggregates = new Set<string>();
         for (const event of this.projectedEvents(context, readModel)) {
             aggregates.add(event.aggregate);
@@ -2229,15 +2301,15 @@ nothing from this app but the stream.
         return context.aggregates.find((a) => a.name === name) ?? null;
     }
 
-    private commandOf(aggregate: Aggregate, name: string): Command | null {
+    protected commandOf(aggregate: Aggregate, name: string): Command | null {
         return aggregate.commands.find((c) => c.name === name) ?? null;
     }
 
-    private slugify(value: string): string {
+    protected slugify(value: string): string {
         return value.toLowerCase().replace(/[^a-z0-9-]+/g, '-') || 'app';
     }
 
-    private file(lines: string[]): string {
+    protected file(lines: string[]): string {
         return lines.join('\n') + '\n';
     }
 }
