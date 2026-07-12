@@ -11,3 +11,4 @@ examples/*/generated/
 /HANDOFF.md
 /CLAUDE.md
 /LOCKS.md
+.c4work/
