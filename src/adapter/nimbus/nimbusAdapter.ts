@@ -777,11 +777,16 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
         const idField = aggregate?.identityField ?? pk;
         const idCamel = camel(idField);
         const pkCamel = camel(pk);
+        // Row key: a read model keyed by a non-identity column (invoiceNumber, memberKey,
+        // domain, …) is addressed by the event's own pk field when it carries one; only
+        // identity-keyed models fall back to the aggregate id. Keying such rows by the
+        // aggregate id collides every row of one aggregate onto a single key.
+        const keyCamel = event.data.has(pk) ? pkCamel : idCamel;
 
         if (!isAnchor && event.lifecycle === 'delete') {
             return [
                 '        const existing = await ' + repoVar + '.findOne({',
-                '            filter: { ' + pkCamel + ': event.data.' + idCamel + ' },',
+                '            filter: { ' + pkCamel + ': event.data.' + keyCamel + ' },',
                 '        }).catch(() => null);',
                 '        if (existing) {',
                 '            await ' + repoVar + '.deleteOne({ item: existing });',
@@ -791,13 +796,23 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
 
         if (isAnchor) {
             const out = [
+                // Replace semantics: re-emitting an anchor for an existing key (re-invite,
+                // re-verify) must not duplicate the row.
+                '        const stale = await ' + repoVar + '.findOne({',
+                '            filter: { ' + pkCamel + ': event.data.' + keyCamel + ' },',
+                '        }).catch(() => null);',
+                '        if (stale) {',
+                '            await ' + repoVar + '.deleteOne({ item: stale });',
+                '        }',
                 '        const item: ' + type + ' = {',
                 '            _id: new ObjectId().toString(),',
                 '            revision: event.id,',
             ];
             for (const column of readModel.columns) {
                 const columnCamel = camel(column.name);
-                if (column.name === idField || column.name === pk) {
+                if (column.name === pk) {
+                    out.push('            ' + columnCamel + ': event.data.' + keyCamel + ',');
+                } else if (column.name === idField) {
                     out.push('            ' + columnCamel + ': event.data.' + idCamel + ',');
                 } else if (event.data.has(column.name)) {
                     out.push('            ' + columnCamel + ': event.data.' + columnCamel + ',');
@@ -812,10 +827,10 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
             return out;
         }
 
-        // mutate: update the columns the event carries (besides identity)
+        // mutate: update the columns the event carries (besides identity and the key)
         const sets: string[] = [];
         for (const field of event.data) {
-            if (field.name === idField || !readModel.columns.has(field.name)) {
+            if (field.name === idField || field.name === pk || !readModel.columns.has(field.name)) {
                 continue;
             }
             const fieldCamel = camel(field.name);
@@ -824,7 +839,7 @@ export class NimbusEventSourcingDbAdapter implements Adapter {
 
         const out = [
             '        await ' + repoVar + '.updateOne({',
-            '            filter: { ' + pkCamel + ': event.data.' + idCamel + ' },',
+            '            filter: { ' + pkCamel + ': event.data.' + keyCamel + ' },',
             '            update: {',
             '                $set: {',
             '                    revision: event.id,',
