@@ -58,6 +58,10 @@ export const runGenerate = async (args: string[]): Promise<number> => {
         return 1;
     }
 
+    if (!flags['skip-lint'] && !validateFeatureScenarios(model)) {
+        return 1;
+    }
+
     let adapter;
     try {
         adapter = AdapterRegistry.withDefaults().get(target);
@@ -193,6 +197,53 @@ const validateModelFeel = (model: Model): boolean => {
         console.log(`  error ${feelError}`);
     }
     error('FEEL guard expressions are invalid — aborting before generation.');
+
+    return false;
+};
+
+/**
+ * GWT consistency gate: a command emits exactly the events it `publishes`, so a
+ * feature scenario's `then` events must all be published by the triggering
+ * command. A scenario that declares a further event (a cascade) is an internally
+ * inconsistent model - cascades belong in a `policy` (event -> command), not in
+ * the command's own outcome. Catches the class of stale scenario that otherwise
+ * only surfaces as a cryptic emitted-test failure.
+ */
+const validateFeatureScenarios = (model: Model): boolean => {
+    const errors: string[] = [];
+    for (const feature of model.features) {
+        const aggregate = model.aggregate(feature.boundedContext, feature.aggregate);
+        if (aggregate === null) {
+            continue;
+        }
+        for (const scenario of feature.scenarios) {
+            if (scenario.isRejection()) {
+                continue;
+            }
+            const command = aggregate.commands.find((c) => c.name === scenario.commandName);
+            if (command === undefined) {
+                continue;
+            }
+            for (const ex of scenario.thenEvents) {
+                if (!command.publishes.includes(ex.event)) {
+                    const published = command.publishes.join(', ') || 'nothing';
+                    errors.push(
+                        `${feature.name}/${scenario.name}: then-event "${ex.event}" is not published by "${command.name}" (publishes: ${published}). A command emits only the events it publishes; model a cascade as a policy (event -> command).`,
+                    );
+                }
+            }
+        }
+    }
+
+    if (errors.length === 0) {
+        return true;
+    }
+
+    console.log('\nFeature scenario validation\n');
+    for (const finding of errors) {
+        console.log(`  error ${finding}`);
+    }
+    error('Feature scenarios declare events their command does not publish — aborting before generation.');
 
     return false;
 };

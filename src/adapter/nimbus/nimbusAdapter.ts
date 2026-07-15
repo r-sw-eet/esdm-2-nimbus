@@ -1504,6 +1504,7 @@ export default httpDevRouter;
             const givenEventNames = new Set<string>();
             let usesFold = false;
             let usesThrows = false;
+            let usesEvents = false;
 
             const bodies: string[] = [];
             for (const scenario of feature.scenarios) {
@@ -1523,6 +1524,8 @@ export default httpDevRouter;
                 }
                 if (scenario.isRejection()) {
                     usesThrows = true;
+                } else {
+                    usesEvents = true;
                 }
                 bodies.push(
                     ...this.scenarioTest(aggregate, scenario, command, event, idProp, reducer, stateType),
@@ -1533,7 +1536,14 @@ export default httpDevRouter;
                 continue;
             }
 
-            const assertNames = usesThrows ? 'assertEquals, assertThrows' : 'assertEquals';
+            const asserts = ['assertEquals'];
+            if (usesEvents) {
+                asserts.push('assertObjectMatch');
+            }
+            if (usesThrows) {
+                asserts.push('assertThrows');
+            }
+            const assertNames = asserts.join(', ');
             const coreImports = usesFold ? 'createCommand, createEvent' : 'createCommand';
 
             const lines: string[] = [
@@ -1631,14 +1641,20 @@ export default httpDevRouter;
             lines.push('    assertThrows(() => ' + fn + '(state, command));');
         } else {
             lines.push('    const events = ' + fn + '(state, command);');
-            lines.push('    assertEquals(events.map((e) => ({ type: e.type, data: e.data })), [');
+            lines.push('    assertEquals(events.length, ' + scenario.thenEvents.length + ');');
+            // Subset-match each emitted event on the scenario-declared fields only:
+            // the event also carries codegen-set fields (status transitions, defaulted
+            // optionals) the scenario does not declare, which must not be over-asserted
+            // to `null`.
+            let evIndex = 0;
             for (const ex of scenario.thenEvents) {
                 const ev = aggregate.event(ex.event);
                 const evConst = ev !== null ? snake(ev.name).toUpperCase() + '_EVENT_TYPE' : "''";
-                const data = ev !== null ? this.dataLiteral(ev.data, ex.data, false) : '{}';
-                lines.push('        { type: ' + evConst + ', data: ' + data + ' },');
+                const data = ev !== null ? this.dataLiteral(ev.data, ex.data, true) : '{}';
+                lines.push('    assertEquals(events[' + evIndex + '].type, ' + evConst + ');');
+                lines.push('    assertObjectMatch(events[' + evIndex + '].data, ' + data + ');');
+                evIndex++;
             }
-            lines.push('    ]);');
         }
 
         lines.push('});');
