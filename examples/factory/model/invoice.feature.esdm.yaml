@@ -1,0 +1,90 @@
+# Given-When-Then behavioral specs for the factory `invoice` aggregate.
+# `then` events OMIT the codegen-set `status` field (set from the event default).
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: invoice-lifecycle
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+scenarios:
+  - name: raise-an-invoice
+    when:
+      command: raise-invoice
+      data: { shipmentId: "f0000000-0000-0000-0000-000000000004" }
+    then:
+      events:
+        # status (default 'raised') is set by the command, not declared here.
+        - event: invoice-raised
+          data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+
+  - name: price-a-raised-invoice
+    given:
+      - event: invoice-raised
+        data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+    when:
+      command: price-invoice
+      data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+    then:
+      events:
+        - event: invoice-priced
+          data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+
+  - name: record-a-payment-on-a-priced-invoice
+    given:
+      - event: invoice-raised
+        data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+      - event: invoice-priced
+        data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+    when:
+      command: record-payment
+      data: { id: "f0000000-0000-0000-0000-000000000005", paidAmount: 250 }
+    then:
+      events:
+        - event: payment-recorded
+          data: { id: "f0000000-0000-0000-0000-000000000005", paidAmount: 250 }
+
+  # FEEL guard: settle-invoice admits `when paidAmount >= amount`.
+  - name: settle-a-fully-paid-invoice
+    given:
+      - event: invoice-raised
+        data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+      - event: invoice-priced
+        data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+      - event: payment-recorded
+        data: { id: "f0000000-0000-0000-0000-000000000005", paidAmount: 250 }
+    when:
+      command: settle-invoice
+      data: { id: "f0000000-0000-0000-0000-000000000005" }
+    then:
+      events:
+        - event: invoice-settled
+          data: { id: "f0000000-0000-0000-0000-000000000005" }
+
+  # State-machine `from` guard: settle-invoice admits only from `paying`.
+  - name: reject-settling-an-unpaid-invoice
+    given:
+      - event: invoice-raised
+        data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+      - event: invoice-priced
+        data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+    when:
+      command: settle-invoice
+      data: { id: "f0000000-0000-0000-0000-000000000005" }
+    then:
+      rejection: { reason: an invoice with no recorded payment cannot be settled }
+
+  # FEEL guard: settle-invoice admits `when paidAmount >= amount`; here 100 < 250.
+  - name: reject-settling-an-underpaid-invoice
+    given:
+      - event: invoice-raised
+        data: { id: "f0000000-0000-0000-0000-000000000005", shipmentId: "f0000000-0000-0000-0000-000000000004" }
+      - event: invoice-priced
+        data: { id: "f0000000-0000-0000-0000-000000000005", amount: 250 }
+      - event: payment-recorded
+        data: { id: "f0000000-0000-0000-0000-000000000005", paidAmount: 100 }
+    when:
+      command: settle-invoice
+      data: { id: "f0000000-0000-0000-0000-000000000005" }
+    then:
+      rejection: { reason: an invoice paid below its amount cannot be settled }

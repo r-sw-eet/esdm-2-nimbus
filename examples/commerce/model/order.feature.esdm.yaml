@@ -1,0 +1,86 @@
+# Given-When-Then behavioral specs for the commerce `order` aggregate.
+# The generator turns each scenario into an executable Deno lifecycle test
+# (given events -> when command -> then events / rejection).
+#
+# `then` events deliberately OMIT the codegen-set `status` field: the command
+# sets it from the event schema default, so the emitted assertion must
+# subset-match only the declared fields and never over-assert `status` to null.
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: order-lifecycle
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+scenarios:
+  - name: place-an-order
+    when:
+      command: place-order
+      data: { customer: "Ada Lovelace", total: 100 }
+    then:
+      events:
+        # status (default 'placed') is set by the command, not declared here.
+        - event: order-placed
+          data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+
+  - name: pay-a-placed-order
+    given:
+      - event: order-placed
+        data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+    when:
+      command: pay-order
+      data: { id: "c0000000-0000-0000-0000-000000000001", paidAmount: 100 }
+    then:
+      events:
+        - event: order-paid
+          data: { id: "c0000000-0000-0000-0000-000000000001", paidAmount: 100 }
+
+  - name: approve-a-fully-paid-order
+    given:
+      - event: order-placed
+        data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+      - event: order-paid
+        data: { id: "c0000000-0000-0000-0000-000000000001", paidAmount: 100 }
+    when:
+      command: approve-order
+      data: { id: "c0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        - event: order-approved
+          data: { id: "c0000000-0000-0000-0000-000000000001" }
+
+  - name: cancel-a-placed-order
+    given:
+      - event: order-placed
+        data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+    when:
+      command: cancel-order
+      data: { id: "c0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        - event: order-cancelled
+          data: { id: "c0000000-0000-0000-0000-000000000001" }
+
+  # State-machine `from` guard: approve-order admits only from `paid`.
+  - name: reject-approving-an-unpaid-order
+    given:
+      - event: order-placed
+        data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+    when:
+      command: approve-order
+      data: { id: "c0000000-0000-0000-0000-000000000001" }
+    then:
+      rejection: { reason: an unpaid order cannot be approved }
+
+  # FEEL guard: approve-order admits `when paidAmount >= total`; here 50 < 100.
+  - name: reject-approving-an-underpaid-order
+    given:
+      - event: order-placed
+        data: { id: "c0000000-0000-0000-0000-000000000001", customer: "Ada Lovelace", total: 100 }
+      - event: order-paid
+        data: { id: "c0000000-0000-0000-0000-000000000001", paidAmount: 50 }
+    when:
+      command: approve-order
+      data: { id: "c0000000-0000-0000-0000-000000000001" }
+    then:
+      rejection: { reason: an order underpaid below its total cannot be approved }

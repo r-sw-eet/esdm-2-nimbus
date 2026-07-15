@@ -71,6 +71,19 @@ for app_dir in "${apps[@]}"; do
             continue
         fi
         echo "$label: $count files"
+
+        # Quality bar: if the app emits tests (it has a feature file), RUN them so
+        # an emitter- or model-regression fails HERE rather than shipping silently
+        # broken golden tests. Generated code carries intentional type looseness,
+        # so run with --no-check.
+        if [ -d "$gen_out/tests" ]; then
+            if (cd "$gen_out" && deno test --no-check -A tests/ >/dev/null 2>&1); then
+                echo "$label: emitted tests PASS"
+            else
+                echo "$label: EMITTED TESTS FAILED"
+                fail=1
+            fi
+        fi
     done
 done
 

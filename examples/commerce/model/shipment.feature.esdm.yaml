@@ -1,0 +1,69 @@
+# Given-When-Then behavioral specs for the commerce `shipment` aggregate.
+# `then` events OMIT the codegen-set `status` field (set from the event default).
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: shipment-lifecycle
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+scenarios:
+  - name: register-a-shipment
+    when:
+      command: register-shipment
+      data: { orderId: "c0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        # status (default 'registered') is set by the command, not declared here.
+        - event: shipment-registered
+          data: { id: "c0000000-0000-0000-0000-000000000002", orderId: "c0000000-0000-0000-0000-000000000001" }
+
+  - name: pack-a-registered-shipment
+    given:
+      - event: shipment-registered
+        data: { id: "c0000000-0000-0000-0000-000000000002", orderId: "c0000000-0000-0000-0000-000000000001" }
+    when:
+      command: pack-shipment
+      data: { id: "c0000000-0000-0000-0000-000000000002", weight: 12.5 }
+    then:
+      events:
+        - event: shipment-packed
+          data: { id: "c0000000-0000-0000-0000-000000000002", weight: 12.5 }
+
+  - name: dispatch-a-packed-shipment
+    given:
+      - event: shipment-registered
+        data: { id: "c0000000-0000-0000-0000-000000000002", orderId: "c0000000-0000-0000-0000-000000000001" }
+      - event: shipment-packed
+        data: { id: "c0000000-0000-0000-0000-000000000002", weight: 12.5 }
+    when:
+      command: dispatch-shipment
+      data: { id: "c0000000-0000-0000-0000-000000000002" }
+    then:
+      events:
+        - event: shipment-dispatched
+          data: { id: "c0000000-0000-0000-0000-000000000002" }
+
+  # State-machine `from` guard: dispatch-shipment admits only from `packed`.
+  - name: reject-dispatching-an-unpacked-shipment
+    given:
+      - event: shipment-registered
+        data: { id: "c0000000-0000-0000-0000-000000000002", orderId: "c0000000-0000-0000-0000-000000000001" }
+    when:
+      command: dispatch-shipment
+      data: { id: "c0000000-0000-0000-0000-000000000002" }
+    then:
+      rejection: { reason: an unpacked shipment cannot be dispatched }
+
+  # FEEL guard: dispatch-shipment admits `when weight > 0`; here weight is 0.
+  - name: reject-dispatching-a-weightless-shipment
+    given:
+      - event: shipment-registered
+        data: { id: "c0000000-0000-0000-0000-000000000002", orderId: "c0000000-0000-0000-0000-000000000001" }
+      - event: shipment-packed
+        data: { id: "c0000000-0000-0000-0000-000000000002", weight: 0 }
+    when:
+      command: dispatch-shipment
+      data: { id: "c0000000-0000-0000-0000-000000000002" }
+    then:
+      rejection: { reason: a shipment with no weight cannot be dispatched }

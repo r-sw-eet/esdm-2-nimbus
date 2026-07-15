@@ -1,0 +1,57 @@
+# Given-When-Then behavioral specs for the factory `workorder` aggregate.
+# `then` events OMIT the codegen-set `status` field (set from the event default).
+# This aggregate has no FEEL `when:` guards, so only `from`-guard rejection applies.
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: workorder-lifecycle
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+scenarios:
+  - name: open-a-work-order
+    when:
+      command: open-work-order
+      data: { orderId: "f0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        # status (default 'opened') is set by the command, not declared here.
+        - event: work-order-opened
+          data: { id: "f0000000-0000-0000-0000-000000000002", orderId: "f0000000-0000-0000-0000-000000000001" }
+
+  - name: start-producing-an-open-work-order
+    given:
+      - event: work-order-opened
+        data: { id: "f0000000-0000-0000-0000-000000000002", orderId: "f0000000-0000-0000-0000-000000000001" }
+    when:
+      command: start-production
+      data: { id: "f0000000-0000-0000-0000-000000000002" }
+    then:
+      events:
+        - event: production-started
+          data: { id: "f0000000-0000-0000-0000-000000000002" }
+
+  - name: finish-a-producing-work-order
+    given:
+      - event: work-order-opened
+        data: { id: "f0000000-0000-0000-0000-000000000002", orderId: "f0000000-0000-0000-0000-000000000001" }
+      - event: production-started
+        data: { id: "f0000000-0000-0000-0000-000000000002" }
+    when:
+      command: finish-production
+      data: { id: "f0000000-0000-0000-0000-000000000002" }
+    then:
+      events:
+        - event: production-finished
+          data: { id: "f0000000-0000-0000-0000-000000000002" }
+
+  # State-machine `from` guard: finish-production admits only from `producing`.
+  - name: reject-finishing-an-unstarted-work-order
+    given:
+      - event: work-order-opened
+        data: { id: "f0000000-0000-0000-0000-000000000002", orderId: "f0000000-0000-0000-0000-000000000001" }
+    when:
+      command: finish-production
+      data: { id: "f0000000-0000-0000-0000-000000000002" }
+    then:
+      rejection: { reason: production that has not started cannot be finished }

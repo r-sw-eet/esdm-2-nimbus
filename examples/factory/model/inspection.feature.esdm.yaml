@@ -1,0 +1,85 @@
+# Given-When-Then behavioral specs for the factory `inspection` aggregate.
+# `then` events OMIT the codegen-set `status` field (set from the event default).
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: inspection-lifecycle
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+scenarios:
+  - name: start-an-inspection
+    when:
+      command: start-inspection
+      data: { workorderId: "f0000000-0000-0000-0000-000000000002" }
+    then:
+      events:
+        # status (default 'inspecting') is set by the command, not declared here.
+        - event: inspection-started
+          data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+
+  - name: record-an-inspection
+    given:
+      - event: inspection-started
+        data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+    when:
+      command: record-inspection
+      data: { id: "f0000000-0000-0000-0000-000000000003", defects: 0 }
+    then:
+      events:
+        - event: inspection-recorded
+          data: { id: "f0000000-0000-0000-0000-000000000003", defects: 0 }
+
+  # FEEL guard: pass-inspection admits `when defects = 0`.
+  - name: pass-a-clean-inspection
+    given:
+      - event: inspection-started
+        data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+      - event: inspection-recorded
+        data: { id: "f0000000-0000-0000-0000-000000000003", defects: 0 }
+    when:
+      command: pass-inspection
+      data: { id: "f0000000-0000-0000-0000-000000000003" }
+    then:
+      events:
+        - event: inspection-passed
+          data: { id: "f0000000-0000-0000-0000-000000000003" }
+
+  # FEEL guard: rework admits `when defects > 0`.
+  - name: rework-a-defective-inspection
+    given:
+      - event: inspection-started
+        data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+      - event: inspection-recorded
+        data: { id: "f0000000-0000-0000-0000-000000000003", defects: 3 }
+    when:
+      command: rework
+      data: { id: "f0000000-0000-0000-0000-000000000003" }
+    then:
+      events:
+        - event: inspection-reworked
+          data: { id: "f0000000-0000-0000-0000-000000000003" }
+
+  # State-machine `from` guard: pass-inspection admits only from `inspected`.
+  - name: reject-passing-an-unrecorded-inspection
+    given:
+      - event: inspection-started
+        data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+    when:
+      command: pass-inspection
+      data: { id: "f0000000-0000-0000-0000-000000000003" }
+    then:
+      rejection: { reason: an inspection with no recorded result cannot pass }
+
+  # FEEL guard: pass-inspection admits `when defects = 0`; here 3 defects were found.
+  - name: reject-passing-a-defective-inspection
+    given:
+      - event: inspection-started
+        data: { id: "f0000000-0000-0000-0000-000000000003", workorderId: "f0000000-0000-0000-0000-000000000002" }
+      - event: inspection-recorded
+        data: { id: "f0000000-0000-0000-0000-000000000003", defects: 3 }
+    when:
+      command: pass-inspection
+      data: { id: "f0000000-0000-0000-0000-000000000003" }
+    then:
+      rejection: { reason: an inspection with open defects cannot pass }

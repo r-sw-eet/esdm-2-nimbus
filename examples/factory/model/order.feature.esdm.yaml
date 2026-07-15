@@ -1,0 +1,85 @@
+# Given-When-Then behavioral specs for the factory `order` aggregate.
+# `then` events OMIT the codegen-set `status` field (set from the event default).
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: order-lifecycle
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+scenarios:
+  - name: place-an-order
+    when:
+      command: place-order
+      data: { customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+    then:
+      events:
+        # status (default 'placed') is set by the command, not declared here.
+        - event: order-placed
+          data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+
+  - name: review-a-placed-order
+    given:
+      - event: order-placed
+        data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+    when:
+      command: review-order
+      data: { id: "f0000000-0000-0000-0000-000000000001", creditOk: true }
+    then:
+      events:
+        - event: order-reviewed
+          data: { id: "f0000000-0000-0000-0000-000000000001", creditOk: true }
+
+  # FEEL guard: confirm-order admits `when creditOk = true`.
+  - name: confirm-a-credit-approved-order
+    given:
+      - event: order-placed
+        data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+      - event: order-reviewed
+        data: { id: "f0000000-0000-0000-0000-000000000001", creditOk: true }
+    when:
+      command: confirm-order
+      data: { id: "f0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        - event: order-confirmed
+          data: { id: "f0000000-0000-0000-0000-000000000001" }
+
+  # FEEL guard: reject-order admits `when creditOk = false`.
+  - name: reject-a-credit-declined-order
+    given:
+      - event: order-placed
+        data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+      - event: order-reviewed
+        data: { id: "f0000000-0000-0000-0000-000000000001", creditOk: false }
+    when:
+      command: reject-order
+      data: { id: "f0000000-0000-0000-0000-000000000001" }
+    then:
+      events:
+        - event: order-rejected
+          data: { id: "f0000000-0000-0000-0000-000000000001" }
+
+  # State-machine `from` guard: confirm-order admits only from `reviewed`.
+  - name: reject-confirming-an-unreviewed-order
+    given:
+      - event: order-placed
+        data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+    when:
+      command: confirm-order
+      data: { id: "f0000000-0000-0000-0000-000000000001" }
+    then:
+      rejection: { reason: an unreviewed order cannot be confirmed }
+
+  # FEEL guard: confirm-order admits `when creditOk = true`; here credit is declined.
+  - name: reject-confirming-a-credit-declined-order
+    given:
+      - event: order-placed
+        data: { id: "f0000000-0000-0000-0000-000000000001", customer: "Acme Co", product: "Steel bracket", quantity: 500 }
+      - event: order-reviewed
+        data: { id: "f0000000-0000-0000-0000-000000000001", creditOk: false }
+    when:
+      command: confirm-order
+      data: { id: "f0000000-0000-0000-0000-000000000001" }
+    then:
+      rejection: { reason: an order without approved credit cannot be confirmed }
